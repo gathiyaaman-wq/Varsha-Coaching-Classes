@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1A237E">
+<title>Varsha Coaching Classes</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;background:#fff;color:#1b1b1b}
+.screen{display:none;min-height:100vh;flex-direction:column}
+.screen.on{display:flex}
+#splash{align-items:center;justify-content:center;text-align:center}
+#splash img{width:140px;margin-bottom:16px}
+h1{font-size:26px;color:#1A237E;margin:0;padding:0 16px}
+.bar{background:#1A237E;color:#fff;font-weight:600;padding:14px;text-align:center}
+#login .box{flex:1;display:flex;flex-direction:column;justify-content:center;padding:24px;gap:14px}
+input{font-size:18px;padding:14px;border:1px solid #888;border-radius:8px}
+button{font-size:18px;padding:14px;border:0;border-radius:30px;background:#1A237E;color:#fff}
+#err{color:#c62828;min-height:22px;text-align:center}
+#live{background:#000}
+video{flex:1;width:100%;min-height:0;background:#000;object-fit:contain}
+#status{color:#fff;text-align:center;padding:8px}
+#talk{margin:8px 20px 24px;user-select:none;-webkit-user-select:none;touch-action:none}
+#talk.on{background:#d32f2f}
+</style>
+</head>
+<body>
+<div id="splash" class="screen on">
+  <img src="/logo.png" alt="" onerror="this.style.display='none'">
+  <h1>Varsha Coaching Classes</h1>
+</div>
+
+<div id="login" class="screen">
+  <div class="bar">Varsha Coaching Classes</div>
+  <div class="box">
+    <div id="who" style="text-align:center;font-size:18px"></div>
+    <input id="uid" placeholder="ID (jaise Mahi)" autocomplete="off" autocapitalize="off">
+    <input id="pass" type="password" placeholder="Password" autocomplete="off">
+    <button id="go"></button>
+    <div id="err"></div>
+  </div>
+</div>
+
+<div id="live" class="screen">
+  <div class="bar">Varsha Coaching Classes - Live</div>
+  <video id="vid" autoplay playsinline></video>
+  <div id="status">Connecting...</div>
+  <button id="talk" style="display:none">Dabake bolo</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const isCam = location.pathname.startsWith('/camera');
+const ICE = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' }
+]};
+const $ = (id) => document.getElementById(id);
+const show = (id) => { document.querySelectorAll('.screen').forEach(e => e.classList.remove('on')); $(id).classList.add('on'); };
+const setStatus = (t) => $('status').textContent = t;
+
+$('who').textContent = isCam ? 'Camera Mode (Classroom phone)' : 'Live Class Dekhein';
+$('go').textContent = isCam ? 'Camera Chalu Karein' : 'Live Dekhein';
+setTimeout(() => show('login'), 3000);
+
+let socket, stream, pass, uid;
+const pcs = {}, pending = {};
+
+$('go').onclick = async () => {
+  uid = $('uid').value.trim(); pass = $('pass').value.trim();
+  if (!uid || !pass) { $('err').textContent = 'ID aur password daalein'; return; }
+  $('err').textContent = '';
+  const audio = { echoCancellation: true, noiseSuppression: true };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(
+      isCam ? { audio, video: { facingMode: 'environment', width: 640, height: 480 } }
+            : { audio, video: false });
+  } catch (e) {
+    if (isCam) { $('err').textContent = 'Camera aur mic ki permission Allow karein'; return; }
+    stream = new MediaStream();
+  }
+  show('live');
+  if (isCam) {
+    $('vid').srcObject = stream; $('vid').muted = true;
+    try { await navigator.wakeLock.request('screen'); } catch (e) {}
+  } else if (stream.getAudioTracks().length) {
+    stream.getAudioTracks().forEach(t => t.enabled = false);
+    $('talk').style.display = 'block';
+  }
+  connect();
+};
+
+function connect() {
+  socket = io();
+  socket.on('connect', () => socket.emit('join', { id: uid, pass, role: isCam ? 'camera' : 'viewer' }));
+  socket.on('denied', () => { show('login'); $('err').textContent = 'Galat ID ya password'; socket.disconnect(); });
+  socket.on('joined', (name) => setStatus(isCam ? 'Live chalu hai' : 'Namaste ' + name + ', camera ka intezaar...'));
+  socket.on('kicked', () => { show('login'); $('err').textContent = 'Ye ID kisi aur phone par khul gayi'; if (stream) stream.getTracks().forEach(t => t.stop()); });
+  socket.on('viewer-joined', callViewer);
+  socket.on('peer-left', (id) => { if (pcs[id]) { pcs[id].close(); delete pcs[id]; }
+    if (!isCam) setStatus('Camera disconnect ho gaya'); });
+  socket.on('signal', ({ from, data }) => onSignal(from, data));
+}
+
+const send = (to, data) => socket.emit('signal', { to, data });
+
+function newPc(id) {
+  const pc = new RTCPeerConnection(ICE);
+  pcs[id] = pc;
+  pc.onicecandidate = (e) => { if (e.candidate) send(id, { ice: e.candidate }); };
+  pc.ontrack = (e) => {
+    if (!isCam) { $('vid').srcObject = e.streams[0]; setStatus('Live'); return; }
+    const a = document.createElement('audio');
+    a.autoplay = true; a.srcObject = e.streams[0]; document.body.appendChild(a);
+  };
+  return pc;
+}
+
+async function callViewer(id) {
+  const pc
