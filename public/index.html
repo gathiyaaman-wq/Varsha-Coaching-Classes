@@ -117,4 +117,42 @@ function newPc(id) {
 }
 
 async function callViewer(id) {
-  const pc
+  const pc = newPc(id);
+  stream.getTracks().forEach(t => pc.addTrack(t, stream));
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  send(id, { sdp: pc.localDescription });
+}
+
+async function onSignal(from, d) {
+  let pc = pcs[from];
+  if (d.sdp) {
+    if (!pc) pc = newPc(from);
+    await pc.setRemoteDescription(d.sdp);
+    for (const c of (pending[from] || [])) await pc.addIceCandidate(c);
+    pending[from] = [];
+    if (d.sdp.type === 'offer') {
+      stream.getAudioTracks().forEach(t => pc.addTrack(t, stream));
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      send(from, { sdp: pc.localDescription });
+    }
+  } else if (d.ice) {
+    if (pc && pc.remoteDescription) await pc.addIceCandidate(d.ice);
+    else (pending[from] = pending[from] || []).push(d.ice);
+  }
+}
+
+const talk = (on) => {
+  if (!stream) return;
+  stream.getAudioTracks().forEach(t => t.enabled = on);
+  $('talk').classList.toggle('on', on);
+  $('talk').textContent = on ? 'Bol rahe hain...' : 'Dabake bolo';
+};
+const tb = $('talk');
+tb.addEventListener('pointerdown', (e) => { e.preventDefault(); talk(true); });
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => tb.addEventListener(ev, () => talk(false)));
+tb.addEventListener('contextmenu', (e) => e.preventDefault());
+</script>
+</body>
+</html>
